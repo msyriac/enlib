@@ -1,11 +1,11 @@
 import numpy as np
 from enlib import enmap, utils, powspec, interpol
 try:
-        from . import curvedsky
+	from . import curvedsky
 except:
-        import traceback, logging
-        traceback.print_exc()
-        logging.warn("Enlib: Couldn't load curvedsky. You probably need to install libsharp. Some functions won't work.")
+	import traceback, logging
+	traceback.print_exc()
+	logging.warn("Enlib: Couldn't load curvedsky. You probably need to install libsharp. Some functions won't work.")
 
 ####### Flat sky lensing #######
 
@@ -88,18 +88,18 @@ def displace_map(imap, pix, order=3, mode="spline", border="cyclic", trans=False
 # its gradient as an argument.
 def lens_map_flat(cmb_map, phi_map,order=4):
 	gpix = enmap.grad_pix(phi_map)
-        return lens_map_flat_pix(cmb_map, gpix,order=order)
+	return lens_map_flat_pix(cmb_map, gpix,order=order)
 
 def lens_map_flat_pix(cmb_map, grad_pix_map,order=4):
-        """
-        Helper function for lens_map_flat. Useful if grad_pix has been pre-calculated.
-        """
-	raw_pix  = cmb_map.pixmap() + grad_pix_map
+	"""
+	Helper function for lens_map_flat. Useful if grad_pix has been pre-calculated.
+	"""
+	raw_pix	 = cmb_map.pixmap() + grad_pix_map
 	# And extract the interpolated values. Because of a bug in map_pixels with
 	# mode="wrap", we must handle wrapping ourselves.
 	npad = int(np.ceil(max(np.max(-raw_pix),np.max(raw_pix-np.array(cmb_map.shape[-2:])[:,None,None]))))
-        pmap = enmap.pad(cmb_map, npad, wrap=True) if npad>0 else cmb_map
-                
+	pmap = enmap.pad(cmb_map, npad, wrap=True) if npad>0 else cmb_map
+		
 	return enmap.samewcs(utils.interpol(pmap, raw_pix+npad, order=order, mode="wrap"), cmb_map)
 
 
@@ -108,7 +108,7 @@ def lens_map_flat_pix(cmb_map, grad_pix_map,order=4):
 
 def rand_map(shape, wcs, ps_lensinput, lmax=None, maplmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
 	from . import curvedsky, sharp
-	ctype   = np.result_type(dtype,0j)
+	ctype	= np.result_type(dtype,0j)
 	# First draw a random lensing field, and use it to compute the undeflected positions
 	if verbose: print("Computing observed coordinates")
 	obs_pos = enmap.posmap(shape, wcs)
@@ -233,8 +233,8 @@ def pole_wrap(pos):
 	return a
 
 #def rand_map(shape, wcs, ps_cmb, ps_lens, lmax=None, dtype=np.float64, seed=None, oversample=2.0, spin=2, output="l", geodesic=True, verbose=False):
-#	ctype   = np.result_type(dtype,0j)
-#	ncomp   = ps_cmb.shape[0]
+#	ctype	= np.result_type(dtype,0j)
+#	ncomp	= ps_cmb.shape[0]
 #	if ps_lens.ndim == 3: ps_lens = ps_lens[0,0]
 #	# First draw a random lensing field, and use it to compute the undeflected positions
 #	if verbose: print "Computing observed coordinates"
@@ -245,7 +245,7 @@ def pole_wrap(pos):
 #		if verbose: print "Computing phi map"
 #		phi_map = curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample)
 #	if verbose: print "Computing grad map"
-#	grad    = curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample, deriv=True)
+#	grad	= curvedsky.alm2map_pos(phi_alm, obs_pos, oversample=oversample, deriv=True)
 #	if verbose: print "Computing alpha map"
 #	raw_pos = enmap.samewcs(offset_by_grad(obs_pos, grad, pol=ncomp>1, geodesic=geodesic), obs_pos)
 #	del phi_alm
