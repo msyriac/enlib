@@ -1,7 +1,7 @@
 import numpy as np
 from enlib import enmap, utils, powspec, interpol
 try:
-        import curvedsky
+        from . import curvedsky
 except:
         import traceback, logging
         traceback.print_exc()

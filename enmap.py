@@ -1509,68 +1509,68 @@ def from_healpix_pol(shape,wcs,hp_map_file,ncomp=1,lmax=0,rot="gal,equ",rot_meth
 	"""
 	
 	import healpy
-        import sharp
-        from enlib import coordinates, curvedsky
+	from . import sharp
+	from enlib import coordinates, curvedsky
 
-        # equatorial to galactic euler zyz angles
-        euler = np.array([57.06793215,  62.87115487, -167.14056929])*enlib.utils.degree
+	# equatorial to galactic euler zyz angles
+	euler = np.array([57.06793215,	62.87115487, -167.14056929])*enlib.utils.degree
 
-        # If multiple templates are specified, the output file is
-        # interpreted as an output directory.
+	# If multiple templates are specified, the output file is
+	# interpreted as an output directory.
 
-        print "Loading map..."
-        assert ncomp == 1 or ncomp == 3, "Only 1 or 3 components supported"
-        dtype = np.float64
-        ctype = np.result_type(dtype,0j)
-        # Read the input maps
-        print hp_map_file
-        m = np.atleast_2d(healpy.read_map(hp_map_file, field=tuple(range(0,ncomp)))).astype(dtype)
+	print("Loading map...")
+	assert ncomp == 1 or ncomp == 3, "Only 1 or 3 components supported"
+	dtype = np.float64
+	ctype = np.result_type(dtype,0j)
+	# Read the input maps
+	print(hp_map_file)
+	m = np.atleast_2d(healpy.read_map(hp_map_file, field=tuple(range(0,ncomp)))).astype(dtype)
 
-        # Prepare the transformation
-        print "SHT prep..."
+	# Prepare the transformation
+	print("SHT prep...")
 
-        nside = healpy.npix2nside(m.shape[1])
-        lmax  = lmax or 3*nside
-        minfo = sharp.map_info_healpix(nside)
-        ainfo = sharp.alm_info(lmax)
-        sht   = sharp.sht(minfo, ainfo)
-        alm   = np.zeros((ncomp,ainfo.nelem), dtype=ctype)
-        # Perform the actual transform
-        print "SHT..."
-        sht.map2alm(m[0], alm[0])
-        
-        if ncomp == 3:
-	        sht.map2alm(m[1:3],alm[1:3], spin=2)
-        del m
+	nside = healpy.npix2nside(m.shape[1])
+	lmax  = lmax or 3*nside
+	minfo = sharp.map_info_healpix(nside)
+	ainfo = sharp.alm_info(lmax)
+	sht   = sharp.sht(minfo, ainfo)
+	alm   = np.zeros((ncomp,ainfo.nelem), dtype=ctype)
+	# Perform the actual transform
+	print("SHT...")
+	sht.map2alm(m[0], alm[0])
+	
+	if ncomp == 3:
+		sht.map2alm(m[1:3],alm[1:3], spin=2)
+	del m
 
 
-        if rot and rot_method != "alm":
-                print "rotate..."
-                pmap = posmap(shape, wcs)
-                s1,s2 = rot.split(",")
-                opos = coordinates.transform(s2, s1, pmap[::-1], pol=ncomp==3)
-                pmap[...] = opos[1::-1]
-                if len(opos) == 3: psi = -opos[2].copy()
-                del opos
-                res  = curvedsky.alm2map_pos(alm, pmap)
-                if ncomp==3:
-                        res[1:3] = rotate_pol(res[1:3], psi)
-        else:
-                print " alm rotate..."
-                # We will project directly onto target map if possible
-                if rot:
-                        s1,s2 = rot.split(",")
-                        if s1 != s2:
-                                print "rotating alm..."
-                                # Note: rotate_alm does not actually modify alm
-                                # if it is single precision
-                                if s1 == "gal" and (s2 == "equ" or s2 == "cel"):
-                                        healpy.rotate_alm(alm, euler[0], euler[1], euler[2])
-                                elif s2 == "gal" and (s1 == "equ" or s1 == "cel"):
-                                        healpy.rotate_alm(alm,-euler[2],-euler[1],-euler[0])
-                                else:
-                                        raise NotImplementedError
-                        print "done rotating alm..."
-                res = enmap.zeros((len(alm),)+shape[-2:], wcs, dtype)
-                res = curvedsky.alm2map(alm, res)
-        return res
+	if rot and rot_method != "alm":
+		print("rotate...")
+		pmap = posmap(shape, wcs)
+		s1,s2 = rot.split(",")
+		opos = coordinates.transform(s2, s1, pmap[::-1], pol=ncomp==3)
+		pmap[...] = opos[1::-1]
+		if len(opos) == 3: psi = -opos[2].copy()
+		del opos
+		res  = curvedsky.alm2map_pos(alm, pmap)
+		if ncomp==3:
+			res[1:3] = rotate_pol(res[1:3], psi)
+	else:
+		print(" alm rotate...")
+		# We will project directly onto target map if possible
+		if rot:
+			s1,s2 = rot.split(",")
+			if s1 != s2:
+				print("rotating alm...")
+				# Note: rotate_alm does not actually modify alm
+				# if it is single precision
+				if s1 == "gal" and (s2 == "equ" or s2 == "cel"):
+					healpy.rotate_alm(alm, euler[0], euler[1], euler[2])
+				elif s2 == "gal" and (s1 == "equ" or s1 == "cel"):
+					healpy.rotate_alm(alm,-euler[2],-euler[1],-euler[0])
+				else:
+					raise NotImplementedError
+			print("done rotating alm...")
+		res = enmap.zeros((len(alm),)+shape[-2:], wcs, dtype)
+		res = curvedsky.alm2map(alm, res)
+	return res
