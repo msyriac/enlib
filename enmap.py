@@ -1375,12 +1375,12 @@ class FourierCalc(object):
 		if len(shape) > 2 and shape[-3] > 1:
 			self.rot = queb_rotmat(lmap(shape,wcs),iau_convention=iau_convention)
 
-	def iqu2teb(self,emap, nthread=0, normalize=True):
+	def iqu2teb(self,emap, nthread=0, normalize=True, rot=True):
 		"""Performs the 2d FFT of the enmap pixels, returning a complex enmap.
 		Similar to harm2map, but uses a pre-calculated self.rot matrix.
 		"""
 		emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
-		if emap.ndim > 2 and emap.shape[-3] > 1:
+		if emap.ndim > 2 and emap.shape[-3] > 1 and rot:
 			emap[...,-2:,:,:] = map_mul(self.rot, emap[...,-2:,:,:])
 		return emap
 
@@ -1394,19 +1394,30 @@ class FourierCalc(object):
 		norm = 1. if pixel_units else self.normfact
 		return np.real(np.conjugate(kmap1)*kmap2)*norm,kmap1
 
-	def power2d(self,emap, emap2=None,nthread=0,pixel_units=False,skip_cross=False):
+	def power2d(self,emap=None, emap2=None,nthread=0,pixel_units=False,skip_cross=False,rot=True, kmap=None, kmap2=None):
 		"""
 		Calculate the power spectrum of emap crossed with emap2 (=emap if None)
 		Returns in radians^2 by default unles pixel_units specified
 		"""
 
-		if emap2 is not None: assert emap.shape==emap2.shape
-		lteb1 = self.iqu2teb(emap,nthread,normalize=False)
-		lteb2 = self.iqu2teb(emap2,nthread,normalize=False) if emap2 is not None else lteb1
+                if kmap is not None:
+                        lteb1 = kmap
+                        ndim = kmap.ndim
+                        if ndim>2 : ncomp = kmap.shape[-3]
+                else:
+                        lteb1 = self.iqu2teb(emap,nthread,normalize=False,rot=rot)
+                        ndim = emap.ndim
+                        if ndim>2 : ncomp = emap.shape[-3]
 
-		if emap.ndim > 2 and emap.shape[-3] > 1:
-			ncomp = emap.shape[-3]
-			retpow = np.empty((ncomp,ncomp,emap.shape[-2],emap.shape[-1]))
+                if kmap2 is not None:
+                        lteb2 = kmap2
+                else:
+                        lteb2 = self.iqu2teb(emap2,nthread,normalize=False,rot=rot) if emap2 is not None else lteb1
+                
+		assert lteb1.shape==lteb2.shape
+		
+		if ndim > 2 and ncomp > 1:
+			retpow = np.empty((ncomp,ncomp,lteb1.shape[-2],lteb1.shape[-1]))
 			for i in range(ncomp):
 				retpow[i,i] = self.f2power(lteb1[i],lteb2[i],pixel_units)
 			if not(skip_cross):

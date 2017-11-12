@@ -13,6 +13,9 @@ This should allow you to import and use many `enlib` modules
 assuming that basic dependencies like `numpy` are present on 
 your system.
 
+If you just need flat-sky lensing, you will need to compile `interpol`.
+See instructions below.
+
 Dependencies
 ============
 Enlib consists of a collection of relatively independend modules, so
