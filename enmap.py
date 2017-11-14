@@ -262,10 +262,16 @@ def pixmap(shape, wcs=None):
 def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	"""Given an array of corner-based pixel coordinates [{y,x},...],
 	return sky coordinates in the same ordering."""
+	from enlib import bench
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], -1)
-	coords = np.asarray(wcs.wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
+
+        with bench.show("coords"):
+                plist = tuple(pflat)[::-1]+(0,)
+                coords = np.asarray(wcs.wcs_pix2world(*(plist))[::-1])*get_unit(wcs)
+
+        
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
 		coords = enlib.utils.unwind(coords)
@@ -1216,12 +1222,15 @@ def read_map_geometry(fname, fmt=None, hdu=None):
 		elif fname.endswith(".fits.gz"): fmt = "fits"
 		else: fmt = "fits"
 	if fmt == "fits":
-		return read_fits_geometry(fname, hdu=hdu)
+		shape, wcs = read_fits_geometry(fname, hdu=hdu)
 	elif fmt == "hdf":
-		return read_hdf_geometry(fname)
+		shape, wcs = read_hdf_geometry(fname)
 	else:
 		raise ValueError
-	return res
+	if len(toks) > 1:
+		sel = eval("enlib.utils.sliceeval"+":".join(toks[1:]))[-2:]
+		shape, wcs = slice_geometry(shape, wcs, sel)
+	return shape, wcs
 
 def write_fits(fname, emap, extra={}):
 	"""Write an enmap to a fits file."""
