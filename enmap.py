@@ -267,15 +267,25 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], -1)
 
-        with bench.show("coords"):
-                plist = tuple(pflat)[::-1]+(0,)
-                coords = np.asarray(wcs.wcs_pix2world(*(plist))[::-1])*get_unit(wcs)
+
+        plist = tuple(pflat)[::-1]+(0,)
+        # print len(plist)
+        # print plist[0].shape,plist[1].shape,plist[2]
+
+        # with bench.show("list"):
+        #slowpart = wcs.wcs_pix2world(plist[0],plist[1],0)
+        # with bench.show("numpy"):
+        slowpart = wcs.wcs_pix2world(*(plist))
+        #print len(slowpart)
+        #print slowpart[0].shape,slowpart[1].shape
+        coords = np.asarray(slowpart[::-1])*get_unit(wcs)
 
         
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
 		coords = enlib.utils.unwind(coords)
 	return coords
+
 
 def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	"""Given an array of coordinates [{dec,ra},...], return
@@ -376,7 +386,7 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
+def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau_convention=True):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
 	power is assumed. If pixel_units is True, the 2D power spectra is assumed
@@ -386,7 +396,7 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False):
 	if scalar:
 		return ifft(kmap).real
 	else:
-		return harm2map(kmap)
+		return harm2map(kmap,iau_convention=iau_convention)
 
 	
 	
@@ -1383,14 +1393,14 @@ class MapGen(object):
 		else:
 			self.covsqrt = spec2flat(shape, wcs, cov, 0.5, mode="constant")
 
-	def get_map(self,seed=None,scalar=False):
+	def get_map(self,seed=None,scalar=False,iau_convention=True):
 		if seed is not None: np.random.seed(seed)
 		data = map_mul(self.covsqrt, rand_gauss_harm(self.shape, self.wcs))
 		kmap = ndmap(data, self.wcs)
 		if scalar:
 			return ifft(kmap).real
 		else:
-			return harm2map(kmap)
+			return harm2map(kmap,iau_convention=iau_convention)
 
 	
 	
