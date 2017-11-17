@@ -262,25 +262,16 @@ def pixmap(shape, wcs=None):
 def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	"""Given an array of corner-based pixel coordinates [{y,x},...],
 	return sky coordinates in the same ordering."""
-	from enlib import bench
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], -1)
 
 
-        plist = tuple(pflat)[::-1]+(0,)
-        # print len(plist)
-        # print plist[0].shape,plist[1].shape,plist[2]
+	plist = tuple(pflat)[::-1]+(0,)
+	slowpart = wcs.wcs_pix2world(*(plist))
+	coords = np.asarray(slowpart[::-1])*get_unit(wcs)
 
-        # with bench.show("list"):
-        #slowpart = wcs.wcs_pix2world(plist[0],plist[1],0)
-        # with bench.show("numpy"):
-        slowpart = wcs.wcs_pix2world(*(plist))
-        #print len(slowpart)
-        #print slowpart[0].shape,slowpart[1].shape
-        coords = np.asarray(slowpart[::-1])*get_unit(wcs)
-
-        
+	
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
 		coords = enlib.utils.unwind(coords)
