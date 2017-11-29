@@ -69,7 +69,7 @@ class ndmap(np.ndarray):
 	def npix(self): return np.product(self.shape[-2:])
 	@property
 	def geometry(self): return self.shape, self.wcs
-	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
+	def project(self, shape, wcs, order=3, mode="nearest", cval=0, prefilter=True, mask_nan=True, safe=True): return project(self, shape, wcs, order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def at(self, pos, order=3, mode="constant", cval=0.0, unit="coord", prefilter=True, mask_nan=True, safe=True): return at(self, pos, order, mode=mode, cval=0, unit=unit, prefilter=prefilter, mask_nan=mask_nan, safe=safe)
 	def autocrop(self, method="plain", value="auto", margin=0, factors=None, return_info=False): return autocrop(self, method, value, margin, factors, return_info)
 	def apod(self, width, profile="cos", fill="zero"): return apod(self, width, profile=profile, fill=fill)
@@ -302,7 +302,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
 	return wpix[::-1].reshape(coords.shape)
 
-def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True):
+def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True, safe=True):
 	"""Project the map into a new map given by the specified
 	shape and wcs, interpolating as necessary. Handles nan
 	regions in the map by masking them before interpolating.
@@ -316,7 +316,7 @@ def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, pr
 		elif enlib.wcs.is_compatible(map.wcs, wcs) and mode == "constant":
 			print("Using extract instead")
 			return extract(map, shape, wcs, cval=cval)
-	pix  = map.sky2pix(posmap(shape, wcs))
+	pix  = map.sky2pix(posmap(shape, wcs), safe=safe)
 	pmap = enlib.utils.interpol(map, pix, order=order, mode=mode, cval=cval, prefilter=prefilter, mask_nan=mask_nan)
 	return ndmap(pmap, wcs)
 
@@ -377,7 +377,7 @@ def _arghelper(map, func, unit):
 	if unit == "coord": res = pix2sky(map.shape, map.wcs, res.T).T
 	return res
 
-def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau_convention=True):
+def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau=False):
 	"""Generate a standard flat-sky pixel-space CMB map in TQU convention based on
 	the provided power spectrum. If cov.ndim is 4, 2D power is assumed else 1D
 	power is assumed. If pixel_units is True, the 2D power spectra is assumed
@@ -387,7 +387,7 @@ def rand_map(shape, wcs, cov, scalar=False, seed=None,pixel_units=False,iau_conv
 	if scalar:
 		return ifft(kmap).real
 	else:
-		return harm2map(kmap,iau_convention=iau_convention)
+		return harm2map(kmap,iau=iau)
 
 	
 	
@@ -453,7 +453,7 @@ def extent_intermediate(shape, wcs):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent_subgrid(shape, wcs, nsub=None):
+def extent_subgrid(shape, wcs, nsub=None, safe=True):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -470,7 +470,7 @@ def extent_subgrid(shape, wcs, nsub=None):
 	wcs.wcs.crpix /= step
 	wcs.wcs.crpix += 0.5
 	# Get position of all the corners, including the far ones
-	pos = posmap([nsub+1,nsub+1], wcs, corner=True)
+	pos = posmap([nsub+1,nsub+1], wcs, corner=True, safe=safe)
 	# Apply az scaling
 	scale = np.zeros([2,nsub,nsub])
 	scale[1] = np.cos(0.5*(pos[0,1:,:-1]+pos[0,:-1,:-1]))
@@ -523,7 +523,7 @@ def pixsizemap(shape, wcs):
 	for a in area:
 		bad  = ~np.isfinite(a)
 		a[bad] = np.mean(a[~bad])
-	return area
+	return ndmap(area, wcs)
 
 def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
@@ -588,27 +588,27 @@ def ifft(emap, omap=None, nthread=0, normalize=True):
 # T,E,B hamonic maps. They are not the most efficient way of doing this.
 # It would be better to precompute the rotation matrix and buffers, and
 # use real transforms.
-def map2harm(emap, nthread=0, normalize=True,iau_convention=True):
+<<<<<<< HEAD
+def map2harm(emap, nthread=0, normalize=True,iau=False):
 	"""Performs the 2d FFT of the enmap pixels, returning a complex enmap."""
 	emap = samewcs(fft(emap,nthread=nthread,normalize=normalize), emap)
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(),iau_convention=iau_convention)
+		rot = queb_rotmat(emap.lmap(),iau=iau)
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return emap
-def harm2map(emap, nthread=0, normalize=True,iau_convention=True):
+def harm2map(emap, nthread=0, normalize=True,iau=False):
 	if emap.ndim > 2 and emap.shape[-3] > 1:
-		rot = queb_rotmat(emap.lmap(), inverse=True,iau_convention=iau_convention)
+		rot = queb_rotmat(emap.lmap(), inverse=True,iau=iau)
 		emap = emap.copy()
 		emap[...,-2:,:,:] = map_mul(rot, emap[...,-2:,:,:])
 	return samewcs(ifft(emap,nthread=nthread,normalize=normalize), emap).real
 
-def queb_rotmat(lmap, inverse=False, iau_convention=True):
+def queb_rotmat(lmap, inverse=False, iau=False):
 	# atan2(x,y) instead of (y,x) because Qr points in the
 	# tangential direction, not radial. This matches flipperpol too.
 	# This corresponds to the Healpix convention. To get IAU,
 	# flip the sign of a.
-
-	sgn = -1 if iau_convention else 1
+	sgn = -1 if iau else 1
 	a    = sgn*2*np.arctan2(-lmap[1], lmap[0])
 	c, s = np.cos(a), np.sin(a)
 	if inverse: s = -s
@@ -711,11 +711,13 @@ def fullsky_geometry(res=None, shape=None, dims=(), proj="car"):
 	if shape is None:
 		res   = np.zeros(2)+res
 		shape = ([1*np.pi,2*np.pi]/res+0.5).astype(int)
+		shape[0] += 1
 	ny,nx = shape
+	ny   -= 1
 	wcs   = enlib.wcs.WCS(naxis=2)
 	wcs.wcs.crval = [0,0]
 	wcs.wcs.cdelt = [-360./nx,180./ny]
-	wcs.wcs.crpix = [nx//2+1,ny//2+1]
+	wcs.wcs.crpix = [nx/2.+1,ny/2.+1]
 	wcs.wcs.ctype = ["RA---CAR","DEC--CAR"]
 	return dims+(ny+1,nx+0), wcs
 
@@ -869,7 +871,7 @@ def upgrade(emap, factor):
 		res.wcs.wcs.crpix[j] += 0.5
 	return res
 
-def pad(emap, pix, return_slice=False,wrap=False):
+def pad(emap, pix, return_slice=False, wrap=False):
 	"""Pad enmap "emap", creating a larger map with zeros filled in on the sides.
 	How much to pad is controlled via pix. If pix is a scalar, it specifies the number
 	of pixels to add on all sides. If it is 1d, it specifies the number of pixels to add
