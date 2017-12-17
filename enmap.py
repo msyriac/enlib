@@ -58,9 +58,9 @@ class ndmap(np.ndarray):
 	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
 	def pixsize(self): return pixsize(self.shape, self.wcs)
-	def pixshape(self): return pixshape(self.shape, self.wcs)
+	def pixshape(self, signed=False): return pixshape(self.shape, self.wcs, signed=signed)
 	def pixsizemap(self): return pixsizemap(self.shape, self.wcs)
-	def extent(self, method="default"): return extent(self.shape, self.wcs, method=method)
+	def extent(self, method="default", signed=False): return extent(self.shape, self.wcs, method=method, signed=signed)
 	@property
 	def preflat(self):
 		"""Returns a view of the map with the non-pixel dimensions flattened."""
@@ -101,8 +101,6 @@ class ndmap(np.ndarray):
 		_, wcs = slice_geometry(self.shape[-2:], self.wcs, sel2)
 		return ndmap(np.ndarray.__getitem__(self, sel), wcs)
 	def __getslice__(self, a, b=None, c=None): return self[slice(a,b,c)]
-	def subinds(self, box, inclusive=False, cap=True): return subinds(self.shape, self.wcs, box, inclusive, cap)
-	def slice_from_box(self, box, inclusive=False): return slice_from_box(self.shape, self.wcs, box, inclusive)
 	def submap(self, box, inclusive=False):
 		"""submap(box, inclusive=False)
 		
@@ -118,31 +116,48 @@ class ndmap(np.ndarray):
 		inclusive : boolean
 			Whether to include pixels that are only partially
 			inside the bounding box. Default: False."""
-		return self[self.slice_from_box(box, inclusive)]
+		ibox   = self.subinds(box, inclusive, cap=False)
+		#islice = enlib.utils.sbox2slice(ibox.T)
+		#return self[islice]
+		def helper(b):
+			if b[2] >= 0: return False, slice(b[0],b[1],b[2])
+			else: return True, slice(b[1]-b[2],b[0]-b[2],-b[2])
+		yflip, yslice = helper(ibox[:,0])
+		xflip, xslice = helper(ibox[:,1])
+		oshape, owcs = slice_geometry(self.shape, self.wcs, (yslice, xslice), nowrap=True)
+		omap = extract(self, oshape, owcs)
+		# Unflip if neccessary
+		if yflip: omap = omap[...,::-1,:]
+		if xflip: omap = omap[...,:,::-1]
+		return omap
+        
+	def subinds(self, box, inclusive=False, cap=True):
+		"""Helper function for submap. Translates the bounding
+		box provided into a pixel units. Assumes rectangular
+		coordinates."""
+		box  = np.asarray(box)
+		# Translate the box to pixels. The 0.5 moves us from
+		# pixel-center coordinates to pixel-edge coordinates,
+		# which we need to distinguish between fully or partially
+		# included pixels
+		#bpix = self.sky2pix(box.T).T
+		bpix = skybox2pixbox(self.shape, self.wcs, box, include_direction=True)
+		# If we are inclusive, find a bounding box, otherwise,
+		# an internal box
+		if inclusive:
+			ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),bpix[2]],dtype=int)
+		else:
+			ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),bpix[2]],dtype=int)
+		# Turn into list of slices, so we can handle reverse slices properly
+		# Make sure we stay inside our map bounds
+		if cap:
+			for b, n in zip(ibox.T,self.shape[-2:]):
+				if b[2] > 0: b[:2] = [max(b[0],  0),min(b[1], n)]
+				else:        b[:2] = [min(b[0],n-1),max(b[1],-1)]
+		return ibox
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-def slice_from_box(shape, wcs, box, inclusive=False):
-	"""slice_from_box(shape, wcs, box, inclusive=False)
-
-	Extract the part of the map inside the given box as a selection
-	without returning the data.
-
-	Parameters
-	----------
-	box : array_like
-		The [[fromy,fromx],[toy,tox]] bounding box to select.
-		The resulting map will have a bounding box as close
-		as possible to this, but will differ slightly due to
-		the finite pixel size.
-	inclusive : boolean
-		Whether to include pixels that are only partially
-		inside the bounding box. Default: False."""
-	ibox = subinds(shape, wcs, box, inclusive)
-	islice = enlib.utils.sbox2slice(ibox.T)
-	return islice
-
-		
 def slice_geometry(shape, wcs, sel, nowrap=False):
 	"""Slice a geometry specified by shape and wcs according to the
 	slice sel. Returns a tuple of the output shape and the correponding
@@ -163,31 +178,6 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 		oshape[i] = (oshape[i]+s.step-1)//s.step
 	return tuple(pre)+tuple(oshape), wcs
 
-
-def subinds(shape, wcs, box, inclusive=False, cap=True):
-	"""Helper function for submap. Translates the bounding
-	box provided into a pixel units. Assumes rectangular
-	coordinates."""
-	box  = np.asarray(box)
-	# Translate the box to pixels. The 0.5 moves us from
-	# pixel-center coordinates to pixel-edge coordinates,
-	# which we need to distinguish between fully or partially
-	# included pixels
-	bpix = sky2pix(shape,wcs,box.T).T
-	dir  = 2*(bpix[1]>bpix[0])-1
-	# If we are inclusive, find a bounding box, otherwise,
-	# an internal box
-	if inclusive:
-		ibox = np.array([np.floor(bpix[0]),np.ceil(bpix[1]),dir],dtype=int)
-	else:
-		ibox = np.array([np.ceil(bpix[0]),np.floor(bpix[1]),dir],dtype=int)
-	# Turn into list of slices, so we can handle reverse slices properly
-	# Make sure we stay inside our map bounds
-	if cap:
-		for b, n in zip(ibox.T,shape[-2:]):
-			if b[2] > 0: b[:2] = [max(b[0],	 0),min(b[1], n)]
-			else:	     b[:2] = [min(b[0],n-1),max(b[1],-1)]
-	return ibox
 
 
 def scale_geometry(shape, wcs, scale):
@@ -299,8 +289,38 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 		if corner: wrefpix += 0.5
 		for i in range(len(wpix)):
 			wn = np.abs(360./wcs.wcs.cdelt[i])
-			wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
+			if safe == 1:
+				wpix[i] = enlib.utils.rewind(wpix[i], wrefpix[i], wn)
+			else:
+				wpix[i] = enlib.utils.unwind(wpix[i], period=wn, ref=wrefpix[i])
 	return wpix[::-1].reshape(coords.shape)
+
+def skybox2pixbox(shape, wcs, skybox, npoint=10, corner=False, include_direction=False):
+	"""Given a coordinate box [{from,to},{dec,ra}], compute a
+	corresponding pixel box [{from,to},{y,x}]. We avoiding
+	wrapping issues by evaluating a number of subpoints."""
+	coords = np.array([
+		np.linspace(skybox[0,0],skybox[1,0],num=npoint,endpoint=True),
+		np.linspace(skybox[0,1],skybox[1,1],num=npoint,endpoint=True)])
+	pix = sky2pix(shape, wcs, coords, corner=corner, safe=2)
+	dir = np.sign(pix[:,1]-pix[:,0])
+	res = pix[:,[0,-1]].T
+	if include_direction: res = np.concatenate([res,dir[None]],0)
+	return res
+
+def box(shape, wcs, npoint=10, corner=True):
+	"""Compute a bounding box for the given geometry."""
+	# Because of wcs's wrapping, we need to evaluate several
+	# extra pixels to make our unwinding unambiguous
+	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
+		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
+	if corner: pix -= 0.5
+	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	if enlib.wcs.is_plain(wcs):
+		return np.array(coords).T[[0,-1]]
+	else:
+		return enlib.utils.unwind(np.array(coords)*enlib.utils.degree).T[[0,-1]]
+
 
 def project(map, shape, wcs, order=3, mode="constant", cval=0.0, force=False, prefilter=True, mask_nan=True, safe=True):
 	"""Project the map into a new map given by the specified
@@ -422,20 +442,21 @@ def rand_gauss_iso_harm(shape, wcs, cov, pixel_units=False):
 	data = map_mul(covsqrt, rand_gauss_harm(shape, wcs))
 	return ndmap(data, wcs)
 
-
-def extent(shape, wcs, method="default", nsub=None):
+def extent(shape, wcs, method="default", nsub=None, signed=False):
 	if method == "default": method = extent_model[-1]
 	if method == "intermediate":
-		return extent_intermediate(shape, wcs)
+		return extent_intermediate(shape, wcs, signed=signed)
 	elif method == "subgrid":
-		return extent_subgrid(shape, wcs, nsub=nsub)
+		return extent_subgrid(shape, wcs, nsub=nsub, signed=signed)
 	else:
 		raise ValueError("Unrecognized extent method '%s'" % method)
 
-def extent_intermediate(shape, wcs):
+def extent_intermediate(shape, wcs, signed=False):
 	"""Estimate the flat-sky extent of the map as the WCS
 	intermediate coordinate extent."""
-	return np.abs(wcs.wcs.cdelt[::-1]*shape[-2:]*get_unit(wcs))
+	res = wcs.wcs.cdelt[::-1]*shape[-2:]*get_unit(wcs)
+	if not signed: res = np.abs(res)
+	return res
 
 # Approximations to physical box size and area are needed
 # for transforming to l-space. We can do this by dividing
@@ -453,7 +474,7 @@ def extent_intermediate(shape, wcs):
 # To construct the coarser system, slicing won't do, as it
 # shaves off some of our area. Instead, we must modify
 # cdelt to match our new pixels: cdelt /= nnew/nold
-def extent_subgrid(shape, wcs, nsub=None, safe=True):
+def extent_subgrid(shape, wcs, nsub=None, safe=True, signed=False):
 	"""Returns an estimate of the "physical" extent of the
 	patch given by shape and wcs as [height,width] in
 	radians. That is, if the patch were on a sphere with
@@ -486,7 +507,9 @@ def extent_subgrid(shape, wcs, nsub=None, safe=True):
 	Ay, Ax = np.sum(areas,0), np.sum(areas,1)
 	Ly = np.sum(np.sum(ly,0)*Ay)/np.sum(Ay)
 	Lx = np.sum(np.sum(lx,1)*Ax)/np.sum(Ax)
-	return np.array([Ly,Lx])
+	res= np.array([Ly,Lx])
+	if signed: res *= wcs.wcs.cdelt[::-1]
+	return res
 
 def area(shape, wcs, nsub=0x10):
 	"""Returns the area of a patch with the given shape
@@ -497,9 +520,9 @@ def pixsize(shape, wcs):
 	"""Returns the area of a single pixel, in steradians."""
 	return area(shape, wcs)/np.product(shape[-2:])
 
-def pixshape(shape, wcs):
+def pixshape(shape, wcs, signed=False):
 	"""Returns the height and width of a single pixel, in radians."""
-	return extent(shape, wcs)/shape[-2:]
+	return extent(shape, wcs, signed=signed)/shape[-2:]
 
 def pixsizemap(shape, wcs):
 	"""Returns the physical area of each pixel in the map in steradians.
@@ -551,7 +574,7 @@ def modrmap(shape, wcs, safe=True, corner=False):
 
 def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
-	step = extent(shape, wcs)/shape[-2:]
+	step = extent(shape, wcs, signed=True)/shape[-2:]
 	ly = np.fft.fftfreq(shape[-2]*oversample, step[0])*2*np.pi
 	lx = np.fft.fftfreq(shape[-1]*oversample, step[1])*2*np.pi
 	if oversample > 1:
@@ -984,7 +1007,7 @@ def grad_pix(m):
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
 	nonstandard directions."""
-	return grad(m)*(m.shape[-2:]/m.extent())[(slice(None),)+(None,)*m.ndim]
+	return grad(m)*(m.shape[-2:]/m.extent(signed=True))[(slice(None),)+(None,)*m.ndim]
 
 def grad_pixf(kmap,normalized=False):
 	"""The gradient of the fourier transformed map kmap 
