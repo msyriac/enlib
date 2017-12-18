@@ -53,7 +53,7 @@ class ndmap(np.ndarray):
 	def box(self): return box(self.shape, self.wcs)
 	def posmap(self, safe=True, corner=False): return posmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def pixmap(self): return pixmap(self.shape, self.wcs)
-	def lmap(self, oversample=1,signed=False): return lmap(self.shape, self.wcs, oversample=oversample,signed=signed)
+	def lmap(self, oversample=1): return lmap(self.shape, self.wcs, oversample=oversample)
 	def modlmap(self, oversample=1): return modlmap(self.shape, self.wcs, oversample=oversample)
 	def modrmap(self, safe=True, corner=False): return modrmap(self.shape, self.wcs, safe=safe, corner=corner)
 	def area(self): return area(self.shape, self.wcs)
@@ -558,10 +558,10 @@ def pixsizemap(shape, wcs):
 		a[bad] = np.mean(a[~bad])
 	return ndmap(area, wcs)
 
-def lmap(shape, wcs, oversample=1,signed=False):
+def lmap(shape, wcs, oversample=1):
 	"""Return a map of all the wavenumbers in the fourier transform
 	of a map with the given shape and wcs."""
-	ly, lx = laxes(shape, wcs, oversample=oversample,signed=signed)
+	ly, lx = laxes(shape, wcs, oversample=oversample)
 	data = np.empty((2,ly.size,lx.size))
 	data[0] = ly[:,None]
 	data[1] = lx[None,:]
@@ -571,7 +571,7 @@ def modlmap(shape, wcs, oversample=1):
 	"""Return a map of all the abs wavenumbers in the fourier transform
 	of a map with the given shape and wcs.
 	"""
-	slmap = lmap(shape,wcs,oversample=oversample,signed=False)
+	slmap = lmap(shape,wcs,oversample=oversample)
 	return np.sum(slmap**2,0)**0.5
 
 
@@ -582,9 +582,9 @@ def modrmap(shape, wcs, safe=True, corner=False):
 	slmap = posmap(shape,wcs,safe=safe,corner=corner)
 	return np.sum(slmap**2,0)**0.5
 
-def laxes(shape, wcs, oversample=1, signed=True):
+def laxes(shape, wcs, oversample=1):
 	overample = int(oversample)
-	step = extent(shape, wcs, signed=signed)/shape[-2:]
+	step = extent(shape, wcs, signed=True)/shape[-2:]
 	ly = np.fft.fftfreq(shape[-2]*oversample, step[0])*2*np.pi
 	lx = np.fft.fftfreq(shape[-1]*oversample, step[1])*2*np.pi
 	if oversample > 1:
@@ -1009,7 +1009,7 @@ def gradf(kmap,normalized=False):
 	If normalized is True, assumes kmap came from fft(...,normalize=True)
 	"""
 	if not(normalized): kmap /= np.prod(kmap.shape[-2:])**0.5
-	return ifft(kmap*_widen(kmap.lmap(signed=False),kmap.ndim+1)*1j).real
+	return ifft(kmap*_widen(kmap.lmap(),kmap.ndim+1)*1j).real
 
 def grad_pix(m):
 	"""The gradient of map m expressed in units of pixels.
@@ -1017,7 +1017,7 @@ def grad_pix(m):
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
 	nonstandard directions."""
-	return grad(m)*(m.shape[-2:]/m.extent(signed=False))[(slice(None),)+(None,)*m.ndim]
+	return grad(m)*(m.shape[-2:]/m.extent(signed=True))[(slice(None),)+(None,)*m.ndim]
 
 def grad_pixf(kmap,normalized=False):
 	"""The gradient of the fourier transformed map kmap 
@@ -1027,7 +1027,7 @@ def grad_pixf(kmap,normalized=False):
 	Useful for avoiding sky2pix-calls for e.g. lensing,
 	and removes the complication of axes that increase in
 	nonstandard directions."""
-	return gradf(kmap,normalized=normalized)*(kmap.shape[-2:]/kmap.extent(signed=False))[(slice(None),)+(None,)*kmap.ndim]
+	return gradf(kmap,normalized=normalized)*(kmap.shape[-2:]/kmap.extent(signed=True))[(slice(None),)+(None,)*kmap.ndim]
 
 
 def div(m,normalize=True):
