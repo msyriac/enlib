@@ -1190,7 +1190,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	#print(hh)
 	
 	#flipwcs = flipper.liteMap.astLib.astWCS.WCS(header, mode="pyfits")
-	flipwcs = flipper.liteMap.astLib.astWCS.WCS(hh, mode="pyfits")
+	flipwcs = lm.astLib.astWCS.WCS(hh, mode="pyfits")
 	iflat = imap.preflat
 	if omap is None:
 		omap = np.empty(iflat.shape[:-2],dtype=object)
