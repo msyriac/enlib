@@ -55,6 +55,11 @@ WCS.__repr__ = describe
 def equal(wcs1, wcs2):
 	return repr(wcs1.to_header()) == repr(wcs2.to_header())
 
+def nobcheck(wcs):
+	res = wcs.deepcopy()
+	res.wcs.bounds_check(False, False)
+	return res
+
 def is_compatible(wcs1, wcs2, tol=1e-3):
 	"""Checks whether two world coordinate systems represent
 	(shifted) versions of the same pixelizations, such that
@@ -64,8 +69,9 @@ def is_compatible(wcs1, wcs2, tol=1e-3):
 	h1 = wcs1.to_header()
 	h2 = wcs2.to_header()
 	for key in h1:
-		if key.startswith("CRVAL") or key.startswith("CRPIX"): continue
+		if key.startswith("CRVAL") or key.startswith("CRPIX") or key.startswith("CDELT"): continue
 		if key not in h2 or h2[key] != h1[key]: return False
+	if np.max(np.abs(wcs1.wcs.cdelt-wcs2.wcs.cdelt))/np.min(np.abs(wcs1.wcs.cdelt)) > tol: return False
 	crdelt = wcs1.wcs.crval - wcs2.wcs.crval
 	cpdelt = wcs1.wcs.crpix - wcs2.wcs.crpix
 	subpix = (crdelt/wcs1.wcs.cdelt - cpdelt + 0.5)%1-0.5
