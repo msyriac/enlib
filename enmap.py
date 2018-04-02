@@ -1166,7 +1166,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	on started with.
 	"""
 	import flipper.liteMap as lm
-        from astLib import astWCS
+	from astLib import astWCS
 	import pyfits
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
@@ -1304,11 +1304,11 @@ def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshol
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-        if wcs_override is None:
-                with warnings.catch_warnings():
-                        wcs = enlib.wcs.WCS(hdu.header).sub(2)
-        else:
-                wcs = wcs_override
+	if wcs_override is None:
+		with warnings.catch_warnings():
+			wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	else:
+		wcs = wcs_override
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
 	if sel is not None:
