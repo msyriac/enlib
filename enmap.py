@@ -135,8 +135,6 @@ class ndmap(np.ndarray):
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-
-
 def subinds(shape, wcs, box, inclusive=False, cap=True):
 	"""Helper function for submap. Translates the bounding
 	box provided into a pixel units. Assumes rectangular
@@ -170,7 +168,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 	pre, shape = shape[:-2], shape[-2:]
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
-	for i,s in enumerate(sel):
+	for i,s in enumerate(sel[-2:]):
 		s = enlib.slice.expand_slice(s, shape[i], nowrap=nowrap)
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1
@@ -1415,4 +1413,9 @@ def fix_endian(map):
 		map = map.byteswap(True).newbyteorder()
 	return map
 
-
+def shift(map, off):
+	off = np.atleast_1d(off)
+	for i, o in enumerate(off):
+		if o != 0:
+			map[:] = np.roll(map, o, -len(off)+i)
+	return map

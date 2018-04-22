@@ -931,7 +931,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			goodfrac_var  = np.sum(wvar > 1e-3)/float(wvar.size)
 			goodfrac_apod = np.mean(split.data.apod)
 			goodfrac = min(goodfrac_var, goodfrac_apod)
-			if goodfrac < 0.1: goodfrac = 0
+			if goodfrac < 0.1: continue
 			ps    = np.abs(map_fft(wdiff))**2
 			#enmap.write_map("test_ps_raw_%s_%d.fits" % (dataset.name, i), ps)
 			# correct for unhit areas, which can't be whitend
@@ -945,6 +945,7 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		#enmap.write_map("test_ps_raw_%s.fits" % dataset.name, dset_ps)
 		# Smooth ps to reduce sample variance
 		dset_ps  = smooth_ps(dset_ps, ps_res, ndof=2*(nsplit-1))
+		print "dset_ps", np.sum(dset_ps), dataset.name
 		# Apply noise window correction if necessary:
 		noisewin = dataset.noise_window_params[0] if "noise_window_params" in dataset else "none"
 		if   noisewin == "none": pass
@@ -958,7 +959,10 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 			# The map has been interpolated using something like bicubic interpolation,
 			# leading to an unknown but separable pixel window
 			ywin, xwin = estimate_separable_pixwin_from_normalized_ps(dset_ps[0])
+			print "ywin", utils.minmax(ywin), "xwin", utils.minmax(xwin), dataset.name
 			ref_area = (ywin[:,None] > 0.9)&(xwin[None,:] > 0.9)&(dset_ps[0]<2)
+			print "ref_ara", np.sum(ref_area), dataset.name
+			if np.sum(ref_area) == 0: ref_area[:] = 1
 			dset_ps /= ywin[:,None]**2
 			dset_ps /= xwin[None,:]**2
 			dset_ps[:,(ywin[:,None]<0.25)|(xwin[None,:]<0.25)] = np.mean(dset_ps[:,ref_area],1)
@@ -967,17 +971,8 @@ def build_noise_model(mapset, ps_res=400, filter_kxrad=20, filter_highpass=200, 
 		else: raise ValueError("Noise window type '%s' not supported" % noisewin)
 		#enmap.write_map("test_ps_smooth_%s.fits" % dataset.name, dset_ps)
 		# If we have invalid values, then this whole dataset should be skipped
+		print "finite?", np.all(np.isfinite(dset_ps)), dataset.name
 		if not np.all(np.isfinite(dset_ps)): continue
-		## Whiten
-		#for i, split in enumerate(dataset.splits):
-		#	if split.data is None: continue
-		#	diff  = split.data.map - dset_map
-		#	with utils.nowarn():
-		#		diff_H   = (1/split.data.div - 1/dset_div)**-0.5
-		#	diff_H[~np.isfinite(diff_H)] = 0
-		#	wdiff = diff * diff_H
-		#	pwdiff = map_ifft(dset_ps**-0.5*map_fft(wdiff))
-		#	enmap.write_map("test_pwdiff_%s_%d.fits" % (dataset.name, i), pwdiff)
 		dataset.iN  = 1/dset_ps
 	# Prune away bad datasets and splits
 	for dataset in mapset.datasets:
@@ -1184,7 +1179,7 @@ class SignalFilter:
 		Ntot  = self.mapset.S*self.B[0]**2 + 1/np.maximum(Hmean**2*self.iN[0],1e-25)
 		filter= self.Q[0]*self.B[0]/Ntot
 		return map_ifft(filter*map_fft(self.m[0])), Ntot
-	def calc_dalpha_empirical(self, alpha, mask_pad=10):
+	def calc_dalpha_empirical(self, alpha, mask_pad=10, downgrade=4):
 		"""Fit the variance of alpha as a linear combination of individual divs,
 		and return the best-fit rms map."""
 		if len(self.H) == 0: return alpha*0+np.inf
@@ -1196,8 +1191,12 @@ class SignalFilter:
 		# I don't trust the edge
 		mask  &= ndimage.distance_transform_edt(self.tot_div > ref_val*0.01) > mask_pad
 		mask  &= np.any(B>0,0)
-		Bs     = B[:,mask]
-		d      = alpha[mask]**2
+		dmask  = enmap.downgrade(mask, downgrade) == 1
+		#Bs     = B[:,mask]
+		#d      = alpha[mask]**2
+		with utils.nowarn():
+			Bs     = 1/enmap.downgrade(1/B, downgrade)[:,dmask]
+		d      = enmap.downgrade(alpha**2, downgrade)[dmask]
 		def calc_chisq2(a):
 			resid  = np.log(d)-np.log(a.dot(Bs))
 			chisq  = np.sum(resid**2)
@@ -2405,15 +2404,16 @@ class SZLikelihood2(PtsrcLikelihood2):
 	def format_sample(self, x):
 		return "%8.3f %8.3f %8.3f" % tuple(x[:3]) + " %8.3f"*(len(x)-3)%tuple(x[3:]/1e3)
 
-
 # This verison uses both ML amps and derivatives at the same time
 class SourceSZFinder3:
-	def __init__(self, mapset, sz_scales=[0.1,0.25,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
+	def __init__(self, mapset, signals=["ptsrc","sz"], sz_scales=[0.1,0.25,0.5,1.0,2.0], snmin=4, npass=4, pass_snmin=6, spix=33, mode="auto", ignore_mean=True, nmax=None, model_snmin=5):
+		print "A %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 		self.mapset = mapset
 		self.scales = sz_scales
 		self.snmin  = snmin
 		self.npass  = npass
 		self.pass_snmin = pass_snmin
+		self.signals= signals
 		self.spix   = spix
 		self.npix   = spix*spix
 		# Precompute the matrix building blocks. These are common for all the sources
@@ -2435,6 +2435,7 @@ class SourceSZFinder3:
 		self.h_min = 1e-10
 		self.nmax  = nmax
 		self.model_snmin = model_snmin
+		print "B %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 	def analyze(self, npass=None, verbosity=0):
 		"""Loop through all analysis passes, returning a final bunch(catalogue, snmaps, model).
 		The catalogue will be the union of all the individual stage catalogues, and the model
@@ -2459,7 +2460,9 @@ class SourceSZFinder3:
 		others = None
 		for it in range(npass):
 			if verbosity >= 1: print "Pass %d" % (it+1)
-			cands, snmaps = self.find_candidates(self.snmin, maps=True, verbosity=verbosity, others=others)
+			# We gradually restrict our edge as we iterate to reduce the effect of ringing
+			# from objects that are just ourside our edge, and hence can't be properly subtracted
+			cands, snmaps = self.find_candidates(self.snmin, maps=True, verbosity=verbosity, others=others, edge=self.mapset.apod_edge*it)
 			others        = np.rec.array(np.concatenate([others,cands])) if others is not None else cands
 			info          = self.measure_candidates(cands, verbosity=verbosity)
 			info.snmaps   = snmaps
@@ -2488,16 +2491,20 @@ class SourceSZFinder3:
 		# Evaluate each candidate
 		for ci, cand in enumerate(cands):
 			ipix  = utils.nint(cand.pix)
+			print "C %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 			t1    = time.time()
 			lik   = self.get_likelihood(ipix, cand.type)
+			print "D %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 			t2    = time.time()
 			# First find the ML-point, which will be our parameter estimate
 			ml    = lik.maximize(verbose = verbosity>=3)
 			# Then sample the likelihood to get an error estimate. Fall back to
 			# full likelihood exploration if the fisher matrix estimate fails
+			print "E %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 			stats = lik.fisher(ml.x)
 			if np.any(np.linalg.eigh(stats.x_cov)[0] <= 0):
 				stats = lik.explore(ml.x, verbose=verbosity >=3)
+			print "F %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 			t3    = time.time()
 			# Build ML model
 			if    cand.type == "sz":
@@ -2539,6 +2546,7 @@ class SourceSZFinder3:
 			if verbosity >= 2:
 				print "%3d %4.1f %4.1f %s" % (ci+1, t2-t1, t3-t2, format_catalogue(c)),
 				sys.stdout.flush()
+			print "F %8.3f %8.3f" % (memory.current()/1024.**3, memory.max()/1024.**3)
 		t5 = time.time()
 		if verbosity >= 1:
 			print "Measured %2d objects in %5.1f s" % (len(cands), t5-t0)
@@ -2573,8 +2581,9 @@ class SourceSZFinder3:
 				dset_iN  += split_iN
 			rhs.append(dset_rhs)
 			iN.append(dset_iN)
-		m = [np.linalg.solve(iN[i], rhs[i]) for i in range(len(rhs))]
 		nmap = len(rhs)
+		m = [np.linalg.solve(iN[i], rhs[i]) for i in range(nmap)]
+		del rhs
 		# Set up degree of freedom grouping
 		if   mode is None:     mode = self.mode
 		if   mode == "auto":   mode = "single" if type == "sz" else "perfreq"
@@ -2589,7 +2598,7 @@ class SourceSZFinder3:
 			return SZLikelihood3(m, iN, self.B, self.iS, shape, wcs, self.freqs, groups=groups)
 		else:
 			raise ValueError("Unknown signal type '%s'" % type)
-	def find_candidates(self, lim=5.0, maps=False, prune=True, verbosity=0, others=None):
+	def find_candidates(self, lim=5.0, maps=False, prune=True, verbosity=0, others=None, edge=0):
 		"""Find matched filter point source and sz candidates with S/N of at least lim.
 		Returns a single list containing both ptsrc and sz candidates, sorted by S/N. They
 		are returned as a recarray with the fields [sn, type, pos[2], pix[2], npix[2]].
@@ -2605,8 +2614,9 @@ class SourceSZFinder3:
 		print "find candidates"
 		#enmap.write_map("test_mu.fits", map_ifft(enmap.enmap(mu, mu[0].wcs)))
 		#1/0
-		for name in ["ptsrc", "sz"]:
+		for name in self.signals:
 			submaps = []
+			print name
 			if name == "ptsrc":
 				setup_profiles_ptsrc(self.mapset)
 				alpha  = filter.calc_alpha(mu)
@@ -2615,15 +2625,18 @@ class SourceSZFinder3:
 			elif name == "sz":
 				snmap = None
 				for si, scale in enumerate(self.scales):
+					print scale
 					setup_profiles_sz(self.mapset, scale)
+					print "calc alpha"
 					alpha  = filter.calc_alpha(mu)
+					print "calc_dalpha"
 					dalpha = filter.calc_dalpha_empirical(alpha)
 					snmap_1scale = div_nonan(alpha, dalpha)
 					if snmap is None: snmap = snmap_1scale
 					else: snmap = np.maximum(snmap, snmap_1scale)
 					submaps.append(bunch.Bunch(name="%03.1f"%scale, snmap=snmap_1scale))
 			else: raise ValueError("Unknown signal type '%s'" % name)
-			cand = find_candidates(snmap, lim, edge=self.mapset.apod_edge)
+			cand = find_candidates(snmap, lim, edge=edge)
 			cand.type  = name
 			cands.append(cand)
 			snmaps.append((name,snmap))
@@ -2702,7 +2715,8 @@ class PtsrcLikelihood3:
 		r     = (1e-10+np.sum(x[:2]**2))**0.5
 		logp  = -log_prob_gauss_positive(ahat, A)
 		logp += soft_prior(r, self.rmax)
-		logp += np.sum(soft_prior(-x[2:], 0))
+		# Why was this one here?
+		#logp += np.sum(soft_prior(-x[2:], 0))
 		return logp
 	def calc_initial_value(self):
 		return np.zeros(self.nx, self.dtype)
@@ -2910,6 +2924,8 @@ class SZLikelihood3(PtsrcLikelihood3):
 		# Needed for sz P evaluation
 		self.pixshape = enmap.pixshape(shape, wcs)/utils.arcmin
 		self.pixshape[1] *= np.cos(enmap.pix2sky(shape, wcs, [shape[-2]/2,shape[-1]/2])[0])
+	def calc_initial_value(self):
+		return np.array([0.0,0.0,1.0])
 	def calc_log_prior(self, x, ahat, A):
 		r     = (1e-10+np.sum(x[:2]**2))**0.5
 		logp  = -log_prob_gauss_positive(ahat, A)
@@ -3336,7 +3352,27 @@ def log_prob_gauss_positive(mu, cov):
 	mu = np.asarray(mu)
 	zero = np.zeros(mu.shape)
 	# logcdf is not as accurate as the log promises
-	return stats.multivariate_normal.logcdf(zero, -mu, cov)
+	try:
+		return stats.multivariate_normal.logcdf(zero, -mu, cov)
+	except np.linalg.LinAlgError:
+		# If we failed, try ignoring the correlations
+		x = mu/np.diag(cov)**0.5
+		if np.all(np.isfinite(x)):
+			return np.sum([log_prob_gauss_positive_single(val) for val in x])
+		else: return -np.inf
+
+def log_prob_gauss_positive_single(x, nmax=10):
+	if x > -10: return np.log(0.5*special.erfc(-x/2**0.5))
+	pre  = -0.5*np.log(2*np.pi) - np.log(-x) - 0.5*x**2
+	rest = 1.
+	fact = 1.
+	div  = 1.
+	for n in xrange(1, nmax):
+		fact *= -(2*n-1)
+		div  *= x**2
+		rest += fact/div
+	res = pre + np.log(rest)
+	return res
 
 # we want an accurate log erf.
 # erf(x) = 2/sqrt(pi) int^x exp(-t**2) dt
@@ -3445,7 +3481,11 @@ def estimate_separable_pixwin_from_normalized_ps(ps2d):
 		profile  = np.sum(ps2d*mask,1-i)/np.sum(mask,1-i)
 		profile /= np.percentile(profile,90)
 		profile  = np.fft.fftshift(profile)
-		edge     = np.where(profile >= 1)[0][[0,-1]]
+		edge     = np.where(profile >= 1)[0]
+		if len(edge) == 0:
+			res.append(np.full(len(profile),1.0))
+			continue
+		edge = edge[[0,-1]]
 		profile[edge[0]:edge[1]] = 1
 		profile  = np.fft.ifftshift(profile)
 		# Pixel window is in signal, not power
