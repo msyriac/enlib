@@ -135,8 +135,6 @@ class ndmap(np.ndarray):
 	def write(self, fname, fmt=None):
 		write_map(fname, self, fmt=fmt)
 
-
-
 def subinds(shape, wcs, box, inclusive=False, cap=True):
 	"""Helper function for submap. Translates the bounding
 	box provided into a pixel units. Assumes rectangular
@@ -170,7 +168,7 @@ def slice_geometry(shape, wcs, sel, nowrap=False):
 	pre, shape = shape[:-2], shape[-2:]
 	oshape = np.array(shape)
 	# The wcs object has the indices in reverse order
-	for i,s in enumerate(sel):
+	for i,s in enumerate(sel[-2:]):
 		s = enlib.slice.expand_slice(s, shape[i], nowrap=nowrap)
 		j = -1-i
 		start = s.start if s.step > 0 else s.start + 1
@@ -201,7 +199,7 @@ def box(shape, wcs, npoint=10, corner=True):
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
 	if corner: pix -= 0.5
-	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	coords = enlib.wcs.nobcheck(wcs).wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
 	else:
@@ -261,13 +259,7 @@ def pix2sky(shape, wcs, pix, safe=True, corner=False):
 	pix = np.asarray(pix).astype(float)
 	if corner: pix -= 0.5
 	pflat = pix.reshape(pix.shape[0], -1)
-
-
-	plist = tuple(pflat)[::-1]+(0,)
-	slowpart = wcs.wcs_pix2world(*(plist))
-	coords = np.asarray(slowpart[::-1])*get_unit(wcs)
-
-	
+	coords = np.asarray(enlib.wcs.nobcheck(wcs).wcs_pix2world(*(tuple(pflat)[::-1]+(0,)))[::-1])*get_unit(wcs)
 	coords = coords.reshape(pix.shape)
 	if safe and not enlib.wcs.is_plain(wcs):
 		coords = enlib.utils.unwind(coords)
@@ -284,7 +276,7 @@ def sky2pix(shape, wcs, coords, safe=True, corner=False):
 	coords = np.asarray(coords)/get_unit(wcs)
 	cflat  = coords.reshape(coords.shape[0], -1)
 	# Quantities with a w prefix are in wcs ordering (ra,dec)
-	wpix = np.asarray(wcs.wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
+	wpix = np.asarray(enlib.wcs.nobcheck(wcs).wcs_world2pix(*tuple(cflat)[::-1]+(0,)))
 	if corner: wpix += 0.5
 	if safe and not enlib.wcs.is_plain(wcs):
 		wshape = shape[-2:][::-1]
@@ -321,7 +313,7 @@ def box(shape, wcs, npoint=10, corner=True):
 	pix = np.array([np.linspace(0,shape[-2],num=npoint,endpoint=True),
 		np.linspace(0,shape[-1],num=npoint,endpoint=True)])
 	if corner: pix -= 0.5
-	coords = wcs.wcs_pix2world(pix[1],pix[0],0)[::-1]
+	coords = enlib.wcs.nobcheck(wcs).wcs_pix2world(pix[1],pix[0],0)[::-1]
 	if enlib.wcs.is_plain(wcs):
 		return np.array(coords).T[[0,-1]]
 	else:
@@ -585,7 +577,7 @@ def modrmap(shape, wcs, safe=True, corner=False):
 	return np.sum(slmap**2,0)**0.5
 
 def laxes(shape, wcs, oversample=1):
-	overample = int(oversample)
+	oversample = int(oversample)
 	step = extent(shape, wcs, signed=True)/shape[-2:]
 	ly = np.fft.fftfreq(shape[-2]*oversample, step[0])*2*np.pi
 	lx = np.fft.fftfreq(shape[-1]*oversample, step[1])*2*np.pi
@@ -733,7 +725,7 @@ def geometry(pos, res=None, shape=None, proj="cea", deg=False, pre=(), **kwargs)
 		# assured the former. Our job is to find shape that puts
 		# the top edge close to the requested value, while still
 		# being valied. If we always round down, we should be safe:
-		faredge = wcs.wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
+		faredge = enlib.wcs.nobcheck(wcs).wcs_world2pix(pos[1:2,::-1],0)[0,::-1]
 		shape = tuple(np.floor(faredge+0.5).astype(int))
 	return pre+tuple(shape), wcs
 
@@ -1172,7 +1164,7 @@ def to_flipper(imap, omap=None, unpack=True):
 	on started with.
 	"""
 	import flipper.liteMap as lm
-        from astLib import astWCS
+	from astLib import astWCS
 	import pyfits
 	if imap.wcs.wcs.cdelt[0] > 0: imap = imap[...,::-1]
 	# flipper wants a different kind of wcs object than we have.
@@ -1310,11 +1302,11 @@ def read_fits(fname, hdu=None, sel=None, box=None, inclusive=False, sel_threshol
 	hdu = astropy.io.fits.open(fname)[hdu]
 	if hdu.header["NAXIS"] < 2:
 		raise ValueError("%s is not an enmap (only %d axes)" % (fname, hdu.header["NAXIS"]))
-        if wcs_override is None:
-                with warnings.catch_warnings():
-                        wcs = enlib.wcs.WCS(hdu.header).sub(2)
-        else:
-                wcs = wcs_override
+	if wcs_override is None:
+		with warnings.catch_warnings():
+			wcs = enlib.wcs.WCS(hdu.header).sub(2)
+	else:
+		wcs = wcs_override
 	# Slice if requested. Slicing at this point avoids unneccessary
 	# I/O and memory usage.
 	if sel is not None:
@@ -1421,4 +1413,9 @@ def fix_endian(map):
 		map = map.byteswap(True).newbyteorder()
 	return map
 
-
+def shift(map, off):
+	off = np.atleast_1d(off)
+	for i, o in enumerate(off):
+		if o != 0:
+			map[:] = np.roll(map, o, -len(off)+i)
+	return map
