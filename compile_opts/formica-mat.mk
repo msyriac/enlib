@@ -4,8 +4,8 @@ export FFLAGS      = -fopenmp -Ofast -fPIC -ffree-line-length-none -fdiagnostics
 #export FFLAGS      = -fopenmp -O0 -fbounds-check -fPIC -ffree-line-length-none -fdiagnostics-color=always -Wno-tabs
 export FSAFE       = -fopenmp -O3 -fPIC -ffree-line-length-none -fdiagnostics-color=always -Wno-tabs
 export FC          = gfortran
-export F2PY        = f2py2
+export F2PY        = f2py
 export F2PYCOMP    = gfortran
-export PYTHON      = python2
+export PYTHON      = python
 export SED         = sed
 export CC          = gcc
