@@ -21,7 +21,7 @@ config.default("pmat_map_order",      0, "The interpolation order of the map poi
 config.default("pmat_cut_type",  "full", "The cut sample representation used. 'full' uses one degree of freedom for each cut sample. 'bin:N' uses one degree of freedom for every N samples. 'exp' used one degree of freedom for the first sample, then one for the next two, one for the next 4, and so on, giving high resoultion at the edges of each cut range, and low resolution in the middle.")
 config.default("map_sys",       "equ", "The coordinate system of the maps. Can be eg. 'hor', 'equ' or 'gal'.")
 config.default("pmat_accuracy",     1.0, "Factor by which to lower accuracy requirement in pointing interpolation. 1.0 corresponds to 1e-3 pixels and 0.1 arc minute in polangle")
-config.default("pmat_interpol_max_size", 100000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
+config.default("pmat_interpol_max_size", 1000000, "Maximum mesh size in pointing interpolation. Worst-case time and memory scale at most proportionally with this.")
 config.default("pmat_interpol_max_time", 50, "Maximum time to spend in pointing interpolation constructor. Actual time spent may be up to twice this.")
 config.default("pmat_interpol_pad", 5.0, "Number of arcminutes to pad the interpolation coordinate system by")
 config.default("tod_window",        5.0, "Seconds by which to window each end of the TOD.")
@@ -262,6 +262,8 @@ class PmatMapMultibeam(PointingMatrix):
 		# each detector to have a separate beam. The dt part is pretty useless.
 		# beam_comps has format [nbeam,ndet,{T,Q,U}].
 		# Get the full box after taking all beam offsets into account
+		self.empty = len(beam_offs) == 0
+		if self.empty: return
 		ibox = np.array([np.min(scan.boresight,0)+np.min(beam_offs,(0,1)),
 				np.max(scan.boresight,0)+np.max(beam_offs,(0,1))])
 		# Build our pointing interpolator
@@ -273,7 +275,6 @@ class PmatMapMultibeam(PointingMatrix):
 		self.beam_offs, self.beam_comps = beam_offs, beam_comps
 		self.pixbox, self.nphi  = build_pixbox(obox[:,:2], template)
 		self.scan,   self.dtype = scan, template.dtype
-		self.func  = get_core(self.dtype).pmat_map
 		self.order = config.get("pmat_map_order", order)
 		self.err   = err
 	def forward(self, tod, m, tmul=1, mmul=1, times=None):
@@ -281,16 +282,30 @@ class PmatMapMultibeam(PointingMatrix):
 		# Loop over each beam, summing its contributions
 		if times is None: times = np.zeros(5)
 		tod *= tmul
+		if self.empty: return
+		core = get_core(tod.dtype)
+		#print "max m", np.max(m)
+		#print "max comp", np.max(np.abs(self.beam_comps))
+		#import h5py
+		#foo_before = tod[:5].copy()
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.core.pmat_map_direct_grid(1, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+			#print "A", bi, boff, bcomp, mmul
+			core.pmat_map_direct_grid(1, tod.T, 1.0, m.T, mmul, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
 					self.pixbox.T, self.nphi, times)
+		#foo_after = tod[:5].copy()
+		#with h5py.File("test.hdf","w") as hfile:
+		#	hfile["before"] = foo_before
+		#	hfile["after"]  = foo_after
+		#1/0
 	def backward(self, tod, m, tmul=1, mmul=1, times=None):
 		"""tod -> m"""
 		if times is None: times = np.zeros(5)
 		m *= mmul
+		if self.empty: return
+		core = get_core(tod.dtype)
 		for bi, (boff, bcomp) in enumerate(zip(self.beam_offs, self.beam_comps)):
-			self.core.pmat_map_direct_grid(-11, tod.T, tmul, m.T, mmul, 1, self.order, self.scan.boresight.T,
+			core.pmat_map_direct_grid(-1, tod.T, tmul, m.T, 1.0, 1, self.order, self.scan.boresight.T,
 					self.scan.hwp_phase.T, boff.T, bcomp.T, self.rbox.T, self.nbox, self.yvals.T,
 					self.pixbox.T, self.nphi, times)
 

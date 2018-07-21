@@ -57,6 +57,7 @@ class Signal:
 		self.precon = PreconNull()
 		self.prior  = PriorNull()
 		self.post   = []
+		self.filters= []
 		self.name   = name
 		self.ofmt   = ofmt
 		self.output = output
@@ -71,6 +72,10 @@ class Signal:
 	def write   (self, prefix, tag, x): pass
 	def postprocess(self, x):
 		for p in self.post: x = p(x)
+		return x
+	def filter(self, x):
+		for f in self.filters:
+			x = f(x)
 		return x
 
 class SignalMap(Signal):
@@ -136,8 +141,7 @@ class SignalDmap(Signal):
 			for scan, subind in zip(scans, subinds):
 				data[scan] = [pmat.PmatMap(scan, work[subind], order=pmat_order, sys=sys), subind]
 		self.data = data
-	def prepare(self, m):
-		return m.tile2work()
+	def prepare(self, m): return m.tile2work()
 	def forward(self, scan, tod, work):
 		if scan not in self.data: return
 		mat, ind = self.data[scan]
@@ -148,6 +152,13 @@ class SignalDmap(Signal):
 		mat.backward(tod, work[ind])
 	def finish(self, m, work):
 		m.work2tile(work)
+	def filter(self, work):
+		res = []
+		for w in work:
+			for filter in self.filters:
+				w = filter(w)
+			res.append(w)
+		return res
 	def zeros(self): return dmap.zeros(self.area.geometry)
 	def work(self):  return self.area.geometry.build_work()
 	def write(self, prefix, tag, m):
@@ -321,7 +332,22 @@ class PreconNull:
 	def __call__(self, m): pass
 	def write(self, prefix="", ext="fits"): pass
 
-config.default("eig_limit", 1e-6, "Smallest relative eigenvalue to invert in eigenvalue inversion. Ones smaller than this are set to zero.")
+config.default("eig_limit", 1e-3, "Smallest relative eigenvalue to invert in eigenvalue inversion. Ones smaller than this are set to zero.")
+# The binned preconditioners use a 3x3 covmat per pixel. This matrix is sometimes
+# poorly conditioned, and can't be inverted. I currently use eigenvalue inversion
+# for this, which works by setting bad eigenvalues to zero. But is this sufficient?
+# Consider a pixel that is hit by a single sample with phase [1,1,0], resulting in
+# the covmat [110,110,000]. This has a single nonzero eigenvalue, and after
+# eigenvalue inversion it will still be proportional to [110,110,000]. This preconditioner
+# forces U to be zero, but it allows T,Q to float. This means that we can't distinguish
+# [0,0,0] from [1,-1,0] or [1e9,-1e9,0], which can lead to runaway pixel values.
+# To avoid this problem we can make the poorly conditioned pixels T-only by setting
+# all but [0,0] of icov to 0.
+#
+# I've moved to this workaround, even though it appears to perform marginally worse
+# at for my one-tod 10-cg test. The main thing that helps in both cases is to use an
+# eig_limit like 1e-3 instead of 1e-6, which I used before
+
 class PreconMapBinned:
 	def __init__(self, signal, signal_cut, scans, weights, noise=True, hits=True):
 		"""Binned preconditioner: (P'W"P)", where W" is a white
@@ -330,7 +356,7 @@ class PreconMapBinned:
 		ncomp = signal.area.shape[0]
 		self.div = enmap.zeros((ncomp,)+signal.area.shape, signal.area.wcs, signal.area.dtype)
 		calc_div_map(self.div, signal, signal_cut, scans, weights, noise=noise)
-		self.idiv = array_ops.svdpow(self.div, -1, axes=[0,1], lim=config.get("eig_limit"))
+		self.idiv = array_ops.eigpow(self.div, -1, axes=[0,1], lim=config.get("eig_limit"), fallback="scalar")
 		#self.idiv[:] = np.eye(3)[:,:,None,None]
 		if hits:
 			# Build hitcount map too
@@ -535,18 +561,7 @@ def calc_div_map(div, signal, signal_cut, scans, weights, noise=True):
 		prec_div_helper(signal, signal_cut, scans, weights, iwork, owork, ijunk, ojunk, noise=noise)
 		signal.finish(div[i], owork)
 
-def calc_crosslink_map(cmap, signal, signal_cut, scans, weights, noise=True):
-	# This is really messy, but it should work. The signal contain a list of
-	# pmats, each of which has a reference to a scan which contains the polarization
-	# phase information. Since it's just a reference, we can change the scans instead
-	# of mucking around inside the pmats. But this is a fragile construction - if
-	# pmat internals change, it will break.
-	saved_comps = [scan.comps.copy() for scan in scans]
-	for scan in scans: scan.comps[:] = np.array([1,1,0])
-	calc_div_map(cmap, signal, signal_cut, scans, weights, noise=noise)
-	for scan, comp in zip(scans, saved_comps): scan.comps = comp
-
-def calc_crosslink_map2(signal, signal_cut, scans, weights, noise=True):
+def calc_crosslink_map(signal, signal_cut, scans, weights, noise=True):
 	saved_comps = [scan.comps.copy() for scan in scans]
 	for scan in scans: scan.comps[:] = np.array([1,1,0])
 	cmap    = signal.zeros()
@@ -563,12 +578,38 @@ def calc_crosslink_map2(signal, signal_cut, scans, weights, noise=True):
 		with bench.mark("cmap_PT_" + signal.name):
 			signal_cut.backward(scan, tod, ojunk)
 			signal.backward(scan, tod, owork)
-		with bench.mark("cmap_Fr_" + signal.name): signal.free()
+		signal.free()
 		times = [bench.stats[s]["time"].last for s in ["cmap_white", "cmap_PT_" + signal.name]]
-		L.debug("div %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+		L.debug("crossmap %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	signal.finish(cmap, owork)
 	# Restore saved components
 	for scan, comp in zip(scans, saved_comps): scan.comps = comp
+	return cmap
+
+def calc_ptsrc_map(signal, signal_cut, scans, src_filters):
+	# First compute P'W"srcs
+	cmap    = signal.zeros()
+	ojunk   = signal_cut.prepare(signal_cut.zeros())
+	owork   = signal.prepare(cmap)
+	for scan in scans:
+		tod = np.zeros((scan.ndet, scan.nsamp), signal.dtype)
+		with bench.mark("srcmap_srcs"):
+			for src_filter in src_filters:
+				src_filter(scan, tod)
+		with bench.mark("srcmap_PT_" + signal.name):
+			signal_cut.backward(scan, tod, ojunk)
+			signal.backward(scan, tod, owork)
+		signal.free()
+		times = [bench.stats[s]["time"].last for s in ["srcmap_srcs", "srcmap_PT_" + signal.name]]
+		L.debug("srcmap %s %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+	signal.finish(cmap, owork)
+	# Then divide out the hits
+	with utils.nowarn():
+		cmap /= signal.precon.hits
+	cmap.fillbad(0, inplace=True)
+	# We want to know what the source model is, which is the opposite of what was
+	# subtracted
+	cmap *= -1
 	return cmap
 
 def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
@@ -609,11 +650,12 @@ def calc_icov_map(signal, scans, pos, weights, signal_cut=None):
 			signal.backward(scan, tod, owork)
 		with bench.mark("icov_Fr_" + signal.name): signal.free()
 		times = [bench.stats[s]["time"].last for s in ["icov_P_" + signal.name, "icov_nmat", "icov_PT_" + signal.name]]
-		L.debug("div %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
+		L.debug("icov %s %6.3f %6.3f %6.3f %s" % ((signal.name,)+tuple(times)+(scan.id,)))
 	signal.finish(ocov, owork)
 	return ocov[0]
 
 def calc_hits_map(hits, signal, signal_cut, scans):
+	hits = hits*0
 	work = signal.prepare(hits)
 	ojunk= signal_cut.prepare(signal_cut.zeros())
 	for scan in scans:
@@ -726,7 +768,6 @@ class FilterPickup:
 		else:
 			waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 			naz = utils.nint(waz/self.daz)
-			print "A", self.daz, waz, naz
 		todfilter.filter_poly_jon(tod, scan.boresight[:,1], hwp=scan.hwp, naz=naz, nt=self.nt, nhwp=self.nhwp, niter=self.niter, cuts=scan.cut)
 
 class FilterHWPNotch:
@@ -757,6 +798,13 @@ class PostPickup:
 		self.ptp = prec_ptp
 		self.weighted = weighted
 	def __call__(self, imap):
+		return self.postfilter_TP_separately(imap)
+	def postfilter_TP_separately(self, imap):
+		res = imap*0
+		tmp = imap.copy(); tmp[1:] = 0; res[:1] = self.postfilter_map(tmp)[:1]
+		tmp = imap.copy(); tmp[:1] = 0; res[1:] = self.postfilter_map(tmp)[1:]
+		return res
+	def postfilter_map(self, imap):
 		# This function has a lot of duplicate code with Eqsys.A :/
 		signals = [self.signal_cut, self.signal_map]
 		imaps   = [self.signal_cut.zeros(), imap]
@@ -769,13 +817,19 @@ class PostPickup:
 			wwork = self.signal_map.prepare(wmap)
 		for scan in self.scans:
 			tod = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
-			for signal, work in zip(signals, iwork)[::-1]:
-				signal.forward(scan, tod, work)
-			if self.weighted: 
-				# Weighted needs quite a bit more memory :/
-				weights = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
-				self.signal_map.forward(scan, weights, wwork)
-			else: weights = None
+			# Skip cut when going forwards - we don't want to introduce lots
+			# of sudden jumps to zero in our simulated tod. We do this by
+			# writing [:0:-1] instead of [::-1], since the 0th entry is the cut.
+			# This could cause problems if a tod both starts outside our hit
+			# area and has cuts there, though...
+			with bench.mark("post_P"):
+				for signal, work in zip(signals, iwork)[:0:-1]:
+					signal.forward(scan, tod, work)
+				if self.weighted:
+					# Weighted needs quite a bit more memory :/
+					weights = np.zeros([scan.ndet, scan.nsamp], self.signal_map.dtype)
+					self.signal_map.forward(scan, weights, wwork)
+				else: weights = None
 			# I'm worried about the effect of single, high pixels at the edge
 			# here. Even when disabling desloping, we may still end up introducing
 			# striping when subtracting polynomials fit to data with very
@@ -785,10 +839,16 @@ class PostPickup:
 			else:
 				waz = (np.max(scan.boresight[:,1])-np.min(scan.boresight[:,1]))/utils.degree
 				naz = utils.nint(waz/self.daz)
-			todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt)
-			for signal, work in zip(signals, owork):
-				signal.backward(scan, tod, work)
-			if self.weighted: del weights, tod
+			with bench.mark("post_F"):
+				todfilter.filter_poly_jon(tod, scan.boresight[:,1], weights=weights, naz=naz, nt=self.nt, deslope=False)
+			# Here we include the cuts. This isn't strictly necessary, but it
+			# preserves our hit area
+			with bench.mark("post_PT"):
+				for signal, work in zip(signals, owork):
+					signal.backward(scan, tod, work)
+				if self.weighted: del weights, tod
+			times = [bench.stats[s]["time"].last for s in ["post_P","post_F","post_PT"]]
+			L.debug("post P %5.3f N %5.3f P' %5.3f %s %4d" % (tuple(times)+(scan.id,scan.ndet)))
 		for signal, map, work in zip(signals, omaps, owork):
 			signal.finish(map, work)
 		# Must use (P'P)" here, not any other preconditioner!
@@ -931,6 +991,23 @@ class FilterGapfill:
 	def __call__(self, scan, tod):
 		gapfill.gapfill(tod, scan.cut, inplace=True)
 
+###### Map filters ######
+
+class MapfilterGauss:
+	def __init__(self, scale, cap=None):
+		self.scale = scale
+		self.cap   = cap
+	def __call__(self, map):
+		l2 = np.sum(map.lmap()**2,0)
+		f  = np.exp(-0.5*l2*self.scale**2)
+		if self.scale < 0: f = 1-f
+		if self.cap:
+			f = np.maximum(f, 1/self.cap)
+		f = f.astype(map.dtype)
+		res = enmap.harm2map(enmap.map2harm(map)/f)
+		res = enmap.samewcs(np.ascontiguousarray(res), res)
+		return res
+
 ######## Equation system ########
 
 class Eqsys:
@@ -950,7 +1027,7 @@ class Eqsys:
 			omaps  = [signal.zeros() for signal in self.signals]
 			# Set up our input and output work arrays. The output work array will accumulate
 			# the results, so it must start at zero.
-			iwork = [signal.prepare(map) for signal, map in zip(self.signals, imaps)]
+			iwork = [signal.filter(signal.prepare(map)) for signal, map in zip(self.signals, imaps)]
 			owork = [signal.work() for signal in self.signals]
 			#owork = [signal.prepare(map) for signal, map in zip(self.signals, omaps)]
 		for si, scan in enumerate(self.scans):
@@ -989,6 +1066,7 @@ class Eqsys:
 		# Collect all the results, and flatten them
 		with bench.mark("A_reduce"):
 			for signal, map, work in zip(self.signals, omaps, owork):
+				work = signal.filter(work)
 				signal.finish(map, work)
 		# priors
 		with bench.mark("A_prior"):
@@ -1054,6 +1132,7 @@ class Eqsys:
 		# Collect results
 		with bench.mark("b_reduce"):
 			for signal, map, work in zip(self.signals, maps, owork):
+				work = signal.filter(work)
 				signal.finish(map, work)
 		with bench.mark("b_zip"):
 			self.b = self.dof.zip(maps)

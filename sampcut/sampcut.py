@@ -72,6 +72,15 @@ class Sampcut:
 		omask = omask.view(np.int8)
 		icore.cut_to_mask(self.ranges.T, self.detmap, omask.T)
 		return omask.view(np.bool)
+	@staticmethod
+	def from_detmask(detmask, nsamp):
+		"""Construct a Sampcut from bool detmask[ndet]. Each detector will be either
+		fully cut (True) or fully accepted (False) based on the values in the mask."""
+		detmask= np.array(detmask,bool)
+		ncut   = np.sum(detmask)
+		ranges = np.tile([[0,nsamp]], [ncut,1]).reshape(-1,2)
+		detmap = np.concatenate([[0],np.cumsum(detmask)])
+		return Sampcut(ranges, detmap, nsamp)
 	@property
 	def ndet(self): return len(self.detmap)-1
 	@property
@@ -114,6 +123,8 @@ class Sampcut:
 		return extract_samples(self, tod)
 	def insert_samples(self, tod, samples):
 		return insert_samples(self, tod, samples)
+	def sum_samples(self, tod):
+		return sum_samples(self, tod)
 	def __len__(self): return self.ndet
 	def __mul__(self, other):
 		"""Compute the composition of these cuts and the right-hand-side,
@@ -186,6 +197,12 @@ class Sampcut:
 			self.ndet, self.nsamp, self.detmap[-1], 100.0*self.sum()/(self.ndet*self.nsamp))
 	def __repr__(self): return "Sampcut(ranges=%s, detmap=%s, nsamp=%d)" % (
 			str(self.ranges), str(self.detmap), self.nsamp)
+	def __eq__(self, other):
+		if self.nsamp != other.nsamp: return False
+		if np.any(self.detmap != other.detmap): return False
+		if self.ranges.shape != other.ranges.shape: return False
+		if np.any(self.ranges != other.ranges): return False
+		return True
 
 def sampcut(ranges, detmap, nsamp, copy=True):
 	"""Construct a new sampcut. Convenience wrapper for Sampcut"""
@@ -202,6 +219,10 @@ def from_list(rlist, nsamp):
 def from_mask(mask):
 	"""Construct a Sampcut from the given bool mask[ndet,nsamp]"""
 	return Sampcut.from_mask(mask)
+def from_detmask(detmask, nsamp):
+	"""Construct a Sampcut from bool detmask[ndet]. Each detector will be either
+	fully cut (True) or fully accepted (False) based on the values in the mask."""
+	return Sampcut.from_detmask(detmask, nsamp)
 
 def stack(cuts):
 	"""stack((c1, c2, ...)). Concatenates the sample cuts c1, c2, etc.
@@ -224,6 +245,12 @@ def insert_samples(cut, tod, samples):
 	"""Inverse of extract_samples. Inserts samples into tod at the location
 	given by Sampcut cut"""
 	get_core(tod.dtype).cut_insert(cut.ranges.T, cut.detmap, tod.T, samples)
+def sum_samples(cut, tod):
+	"""Sum the samples indicated by the Sampcut cut from the given tod,
+	and return them as a 1d array"""
+	vals = np.empty(cut.nrange, tod.dtype)
+	get_core(tod.dtype).cut_sum(cut.ranges.T, cut.detmap, tod.T, vals)
+	return vals
 
 def gapfill_const(cut, tod, value, inplace=False):
 	"""Fill cut values in tod by the given value. Returns the result."""
@@ -233,7 +260,7 @@ def gapfill_const(cut, tod, value, inplace=False):
 	if cut.ndet == 1 and tod.shape[0] > 1: cut = cut.repeat(tod.shape[0])
 	get_core(tod.dtype).gapfill_const(cut.ranges.T, cut.detmap, tod.T, value)
 	return tod.reshape(ishape)
-def gapfill_linear(cut, tod, context=1, inplace=False):
+def gapfill_linear(cut, tod, context=1, inplace=False, transpose=False):
 	"""Fill cut ranges in tod with straight lines. context determines
 	how many samples at each edge of the cut to use for determining the
 	start and end value for each straight line. Defaults to 1 sample.
@@ -242,5 +269,5 @@ def gapfill_linear(cut, tod, context=1, inplace=False):
 	ishape = tod.shape
 	if tod.ndim == 1: tod = tod.reshape(-1,tod.shape[-1])
 	if cut.ndet == 1 and tod.shape[0] > 1: cut = cut.repeat(tod.shape[0])
-	get_core(tod.dtype).gapfill_linear(cut.ranges.T, cut.detmap, tod.T, context)
+	get_core(tod.dtype).gapfill_linear(cut.ranges.T, cut.detmap, tod.T, context, transpose)
 	return tod.reshape(ishape)
