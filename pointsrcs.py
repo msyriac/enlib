@@ -24,7 +24,7 @@ possible. Parametrizing them in a standard format may be difficult.
 """
 import numpy as np
 from astropy.io import fits
-from enlib import utils, enmap, bench
+from . import utils, enmap, bench
 
 #### Map-space source simulation ###
 
@@ -213,10 +213,10 @@ def read_nemo(fname):
 
 def read_simple(fname):
 	try:
-		return np.loadtxt(fname, dtype=[("ra","d"),("dec","d"),("I","d"),("dI","d")], usecols=range(4)).view(np.recarray)
+		return np.loadtxt(fname, dtype=[("ra","d"),("dec","d"),("I","d"),("dI","d")], usecols=range(4), ndmin=1).view(np.recarray)
 	except ValueError:
 		try:
-			return np.loadtxt(fname, dtype=[("ra","d"),("dec","d"),("I","d")], usecols=range(3)).view(np.recarray)
+			return np.loadtxt(fname, dtype=[("ra","d"),("dec","d"),("I","d")], usecols=range(3), ndmin=1).view(np.recarray)
 		except ValueError as e:
 			raise IOError(e.message)
 
